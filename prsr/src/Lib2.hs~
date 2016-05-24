@@ -1,0 +1,150 @@
+module Lib
+    ( someFunc
+    ) where
+
+import Control.Applicative hiding ( many )
+import Data.Monoid
+import Data.Maybe
+import Data.List 
+
+someFunc :: IO ()
+someFunc = do 
+ putStrLn "Gib einen File-Ort an."
+ file <- getLine
+ text <- readFile file
+ putStrLn text
+
+
+data Person = Person {   firstName :: String
+                       , lastName  :: String
+                       , eMail     :: String 
+                       , grade     :: Double }
+                       deriving Show
+
+data CSVFile = File [Row]
+ deriving Show 
+
+data Row = Row FieldList EoL
+ deriving Show 
+
+data FieldList = FL [Field]
+ deriving Show 
+
+data Field = Field FieldValue
+ deriving Show 
+
+data Space = WS | Tab 
+ deriving Show 
+
+data FieldValue = FVQ String | FVB String 
+ deriving Show 
+
+data EoL = EoL
+ deriving Show 
+
+newtype Parser a = Parser (String -> [(a,String)])
+parse :: Parser a -> String -> [(a,String)]
+parse (Parser p) = p
+
+class Monad m => MonadZero m where 
+ mzero :: m a 
+
+class MonadZero m => MonadPlus m where 
+ mplus :: m a -> m a -> m a 
+
+instance Functor Parser where 
+ fmap f p  = Parser (\cs -> [(f a,cs') | (a,cs') <- parse p cs])
+
+instance Applicative Parser where 
+ pure a =  Parser (\cs -> [(a,cs)])
+ p <*> q = Parser (\cs -> [(f a,cs') | (f,cs') <- parse p cs, (a,cs') <- parse q cs ])
+
+instance Monad Parser where 
+ return a = Parser (\cs -> [(a,cs)])
+ p >>= f  = Parser (\cs -> concat [parse (f a) cs' | (a,cs') <- parse p cs])
+
+instance Lib.MonadZero Parser where 
+ mzero = Parser (\cs -> [])
+
+instance Lib.MonadPlus Parser where 
+ mplus p q = Parser (\cs -> parse p cs ++ parse q cs)
+
+(+++) :: Parser a -> Parser a -> Parser a 
+p +++ q = Parser (\cs -> case parse (mplus p q) cs of 
+                                []     -> []
+                                (x:xs) -> [x])
+
+fieldValue :: Parser FieldValue
+fieldValue =  Parser f
+ where 
+  f :: String -> [(FieldValue,String)]
+  f ""                 = []
+  f l | head l /= '"'  = [(FVB (take (bEnd l) l), drop (bEnd l) l)]
+      | otherwise      = [(FVQ (fvqError (take (qEnd l) l)), drop (qEnd l) l)]
+                         where bEnd xs | elem ',' xs || elem '\n' xs = fromMaybe  (elemIndex ',' xs) (elemIndex '\n' xs)
+                                       | otherwise                   = error "csv-Dateien müssen auf \" '\' 'n' \" enden."
+                               
+qEnd xs | elem '"' xs = fromJust (elemIndex '"' xs)
+        | otherwise   = error "\"quoted-string\" muss auf \" enden."
+
+fvqError :: String -> String
+fvqError s = if notElem '\n' s then s else error "Ungültiger Zeilenumbruch in \"quoted-string\" entdeckt."
+
+field :: Parser Field
+field = whitespaces >> fieldValue >>= \fv -> return $ Field fv 
+
+fieldList :: Parser FieldList 
+fieldList = do {f <- field; fs <- ff; return (FL (f:fs))} 
+ where ff = many $ do {char ','; f1 <- field; return f1}
+
+row :: Parser Row
+row = do {r <- fieldList; char '\n'; return (Row r EoL)}
+
+space :: Parser Char
+space = char ' ' 
+
+{-
+eol :: Parser EoL 
+eol = Parser (\(x:y:xs) -> if ((x:y:[]) == "\n") then [(EoL,xs)] else [])
+
+do
+ whitespaces 
+ fv <- fieldValue 
+ return $ Field fv 
+
+field = 
+-}
+
+sat :: (Char -> Bool) -> Parser Char 
+sat p = do {c <- item; if p c then return c else mzero} 
+--mit sat lässt sich besser schreiben: char c = sat (c ==) ... 
+
+many :: Parser a -> Parser [a]
+many p = many1 p +++ return [] 
+
+many1 :: Parser a -> Parser [a]
+many1 p = do {a <- p; as <- many p; return (a:as)} 
+
+item :: Parser Char 
+item = Parser (\xs -> case xs of 
+                         ""      -> []
+                         (c:cs) -> [(c,cs)])
+
+char :: Char -> Parser Char 
+char c = Parser f --bzw. schlicht sat (c ==)
+ where 
+  f :: String -> [(Char,String)]
+  f ""                   = []
+  f (x:xs) | (x /= c)    = []
+           | otherwise   = [(c,xs)]
+
+whitespaces :: Parser String 
+whitespaces = Parser (\l -> case l of 
+                       "" -> []
+                       l -> [(takeWhile (\x -> (x == ' ' || x == '\t')) l, dropWhile (\x -> (x == ' ' || x == '\t')) l)] )
+
+string :: String -> Parser String
+string ""     = return ""
+string (c:cs) = do {char c; string cs; return (c:cs)}
+
+
