@@ -1,7 +1,0 @@
-data CSVfile = Row [Row]
-
-type Row = Int
-
-f :: Int -> CSVfile
-f x     | x >= 0 = 2 [1]
-        | otherwise = 2 [2]
